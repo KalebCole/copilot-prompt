@@ -172,7 +172,11 @@ const SYSTEM_PROMPT =
   "If the input contains a list of items, preserve them as a structured list in the output. " +
   "If images are attached, reference them naturally in the prompt (e.g., 'as shown in the attached screenshot'). " +
   "Do not use markdown formatting — no bold, italic, headers, horizontal rules, or code blocks. Output plain text only. " +
-  "Output only the rewritten prompt. No preamble, no commentary, no wrapper text like 'Here is your rewritten prompt'.";
+  "Output only the rewritten prompt. No preamble, no commentary, no wrapper text like 'Here is your rewritten prompt'. " +
+  "When input is vague, under-specified, or contains multiple implicit tasks, decompose into numbered steps with clear action verbs. " +
+  "Prefer imperative action verbs: Search, Read, Create, Query, Launch, Run — instead of vague phrasing like look at, check out, figure out. " +
+  "When user intent maps to a specific Copilot CLI tool, name it: grep for content search, glob for file discovery, view for reading files, explore agents for parallel research, rubber-duck for plan critique. Do not reference tools when the mapping is obvious from context. " +
+  "Correct casing on known acronyms from conversation context (e.g., ascm to ASCM). Leave ambiguous identifiers unchanged rather than guessing.";
 
 
 const LLM_BASE_URL = "http://localhost:5000/v1/chat/completions";
