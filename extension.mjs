@@ -455,6 +455,11 @@ const session = await joinSession({
           // Sanitize markdown and preamble from LLM output
           rewrittenPrompt = sanitizePrompt(rewrittenPrompt);
 
+          // Log original input for comparison before showing elicitation
+          await session.rpc.log({
+            message: `Original: ${rawInput}`,
+          });
+
           // Discover available skills for the selector
           const availableSkills = discoverSkills();
           const skillOptions = [
