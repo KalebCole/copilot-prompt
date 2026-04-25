@@ -466,75 +466,140 @@ const session = await joinSession({
           ];
 
           let result;
-          try {
-            result = await session.rpc.ui.elicitation({
-              message:
-                "Review the rewritten prompt. Edit if needed, then Accept to send it to the agent.",
-              requestedSchema: {
-                type: "object",
-                properties: {
-                  prompt: {
-                    type: "string",
-                    title: "Rewritten Prompt",
-                    description: "Edit this prompt before sending",
-                    default: rewrittenPrompt,
-                  },
-                  skill: {
-                    type: "string",
-                    title: "Target Skill",
-                    description:
-                      "Select a skill to route this prompt to (optional)",
-                    default: "",
-                    oneOf: skillOptions,
-                  },
-                },
-                required: ["prompt"],
-              },
-            });
-          } catch {
-            await session.rpc.log({
-              message: `Rewritten prompt:\n${rewrittenPrompt}\n\n(Elicitation UI not available. Copy and paste this prompt manually.)`,
-            });
-            return;
-          }
+          let currentPrompt = rewrittenPrompt;
+          const feedbackHistory = [];
 
-          if (result.action === "accept") {
-            let finalPrompt =
+          // Iterative refinement loop — no cap on iterations
+          while (true) {
+            try {
+              result = await session.rpc.ui.elicitation({
+                message:
+                  "Review the rewritten prompt. Edit if needed, then Accept to send it to the agent.",
+                requestedSchema: {
+                  type: "object",
+                  properties: {
+                    prompt: {
+                      type: "string",
+                      title: "Rewritten Prompt",
+                      description: "Edit this prompt before sending",
+                      default: currentPrompt,
+                    },
+                    skill: {
+                      type: "string",
+                      title: "Target Skill",
+                      description:
+                        "Select a skill to route this prompt to (optional)",
+                      default: "",
+                      oneOf: skillOptions,
+                    },
+                    feedback: {
+                      type: "string",
+                      title: "Refinement Feedback",
+                      description:
+                        "How should I refine this? (leave empty to send as-is)",
+                      default: "",
+                    },
+                  },
+                  required: ["prompt"],
+                },
+              });
+            } catch {
+              await session.rpc.log({
+                message: `Rewritten prompt:\n${currentPrompt}\n\n(Elicitation UI not available. Copy and paste this prompt manually.)`,
+              });
+              return;
+            }
+
+            // Decline = cancel entirely
+            if (result.action !== "accept") {
+              await session.rpc.log({ message: "Prompt: cancelled." });
+              return;
+            }
+
+            const feedback = result.content?.feedback?.trim() || "";
+
+            // No feedback = send the prompt
+            if (!feedback) break;
+
+            // Regenerate with feedback
+            await session.rpc.log({
+              message: `Prompt: regenerating with feedback...`,
+            });
+
+            feedbackHistory.push(feedback);
+            const currentText =
               typeof result.content?.prompt === "string" &&
               result.content.prompt
                 ? result.content.prompt
-                : rewrittenPrompt;
+                : currentPrompt;
 
-            // Sanitize the final prompt in case the user introduced markdown while editing
-            finalPrompt = sanitizePrompt(finalPrompt);
+            const regenMessages = [
+              { role: "system", content: SYSTEM_PROMPT },
+              ...(contextMessages.length > 0
+                ? [
+                    {
+                      role: "system",
+                      content:
+                        "Here is the user's current conversation with their AI assistant for context:\n\n" +
+                        contextMessages
+                          .map(
+                            (m) => `[${m.role.toUpperCase()}]: ${m.content}`
+                          )
+                          .join("\n\n"),
+                    },
+                  ]
+                : []),
+              {
+                role: "user",
+                content: `Original input:\n${rawInput}\n\nCurrent rewrite:\n${currentText}\n\nFeedback: ${feedbackHistory.join(" | ")}\n\nRewrite the prompt incorporating this feedback.`,
+              },
+            ];
 
-            // Prepend selected skill invocation
-            const selectedSkill = result.content?.skill || "";
-            if (selectedSkill) {
-              finalPrompt = `${selectedSkill} ${finalPrompt}`;
+            try {
+              const regenerated = await callLLM(model, regenMessages);
+              currentPrompt = sanitizePrompt(regenerated) || currentPrompt;
+            } catch (regenErr) {
+              await session.rpc.log({
+                message: `Regeneration failed: ${regenErr.message}. Keeping current version.`,
+                level: "warning",
+              });
             }
-
-            // Forward with attachments if we found any
-            const sendPayload = { prompt: finalPrompt };
-            if (recentAttachments.length > 0) {
-              sendPayload.attachments = recentAttachments;
-            }
-
-            await session.send(sendPayload);
-
-            const imgNote =
-              recentAttachments.length > 0
-                ? ` (with ${recentAttachments.length} image${recentAttachments.length > 1 ? "s" : ""})`
-                : "";
-            const skillNote = selectedSkill
-              ? ` → ${selectedSkill}`
-              : "";
-            await session.rpc.log({
-              message: `Prompt: sent rewritten prompt to agent${skillNote}${imgNote}.`,
-            });
-          } else {
-            await session.rpc.log({ message: "Prompt: cancelled." });
           }
+
+          // User accepted with no feedback — send the prompt
+          let finalPrompt =
+            typeof result.content?.prompt === "string" &&
+            result.content.prompt
+              ? result.content.prompt
+              : currentPrompt;
+
+          // Sanitize the final prompt in case the user introduced markdown while editing
+          finalPrompt = sanitizePrompt(finalPrompt);
+
+          // Prepend selected skill invocation
+          const selectedSkill = result.content?.skill || "";
+          if (selectedSkill) {
+            finalPrompt = `${selectedSkill} ${finalPrompt}`;
+          }
+
+          // Forward with attachments if we found any
+          const sendPayload = { prompt: finalPrompt };
+          if (recentAttachments.length > 0) {
+            sendPayload.attachments = recentAttachments;
+          }
+
+          await session.send(sendPayload);
+
+          const imgNote =
+            recentAttachments.length > 0
+              ? ` (with ${recentAttachments.length} image${recentAttachments.length > 1 ? "s" : ""})`
+              : "";
+          const skillNote = selectedSkill
+            ? ` → ${selectedSkill}`
+            : "";
+          await session.rpc.log({
+            message: `Prompt: sent rewritten prompt to agent${skillNote}${imgNote}.`,
+          });
         } catch (err) {
           try {
             await session.rpc.log({
