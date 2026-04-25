@@ -565,9 +565,10 @@ const session = await joinSession({
               currentPrompt = sanitizePrompt(regenerated) || currentPrompt;
             } catch (regenErr) {
               await session.rpc.log({
-                message: `Regeneration failed: ${regenErr.message}. Keeping current version.`,
+                message: `Regeneration failed: ${regenErr.message}. Sending current version.`,
                 level: "warning",
               });
+              break;
             }
           }
 
@@ -580,6 +581,14 @@ const session = await joinSession({
 
           // Sanitize the final prompt in case the user introduced markdown while editing
           finalPrompt = sanitizePrompt(finalPrompt);
+
+          if (!finalPrompt) {
+            await session.rpc.log({
+              message: "Prompt: empty after sanitization. Nothing to send.",
+              level: "error",
+            });
+            return;
+          }
 
           // Prepend selected skill invocation
           const selectedSkill = result.content?.skill || "";
