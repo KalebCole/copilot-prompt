@@ -144,6 +144,7 @@ const SYSTEM_PROMPT =
   "The rewritten prompt will be executed by Copilot CLI directly — optimize for its tools (grep, glob, view, edit, create, powershell), sub-agents (explore for parallel research, task for builds and tests, code-review for diff analysis), and ability to make multiple independent tool calls in a single turn. " +
   "Use the conversation history to understand what's been done and what the user is working toward. " +
   "Preserve intent exactly — do not add goals the user didn't express. " +
+  "Preserve all URLs, links, file paths, and identifiers from the input verbatim — never summarize, shorten, or omit them. " +
   "If the input contains a list of items, preserve them as a structured list in the output. " +
   "If images are attached, reference them naturally in the prompt (e.g., 'as shown in the attached screenshot'). " +
   "Do not use markdown formatting — no bold, italic, headers, horizontal rules, or code blocks. Output plain text only. " +
