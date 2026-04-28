@@ -1,8 +1,7 @@
 import { joinSession } from "@github/copilot-sdk/extension";
 import { execSync } from "node:child_process";
-import { readFileSync, existsSync, readdirSync } from "node:fs";
-import { resolve, join, basename } from "node:path";
-import { homedir } from "node:os";
+import { readFileSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
 
 function extractMessages(events) {
   const msgs = [];
@@ -108,127 +107,6 @@ function sanitizePrompt(text) {
   s = s.replace(/^```\w*\n?/gm, "").replace(/\n?```$/gm, "");
   s = s.replace(/^---+\s*$/gm, "");
   return s.trim();
-}
-
-/**
- * Parse YAML frontmatter from a SKILL.md file.
- * Returns { name, description } or null if unparseable.
- */
-function parseSkillFrontmatter(filePath) {
-  try {
-    const content = readFileSync(filePath, "utf-8");
-    const match = content.match(/^---\s*\n([\s\S]*?)\n---/);
-    if (!match) return null;
-
-    const yaml = match[1];
-    const name = yaml.match(/^name:\s*(.+)$/m)?.[1]?.trim();
-    const desc = yaml.match(/^description:\s*(.+)$/m)?.[1]?.trim();
-    if (!name) return null;
-
-    return { name, description: desc || name };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Discover available skills from the local filesystem.
- * Scans root skills and enabled plugin skills.
- * Returns sorted Array<{ name, description, invocation }>.
- */
-function discoverSkills() {
-  const skills = [];
-  const home = homedir();
-  const seen = new Set();
-
-  // Scan root skills: ~/.copilot/skills/*/SKILL.md
-  const skillsDir = join(home, ".copilot", "skills");
-  if (existsSync(skillsDir)) {
-    try {
-      for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
-        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-        const skillMd = join(skillsDir, entry.name, "SKILL.md");
-        const meta = parseSkillFrontmatter(skillMd);
-        if (meta && !seen.has(meta.name)) {
-          seen.add(meta.name);
-          skills.push({
-            name: meta.name,
-            description: meta.description,
-            invocation: `/${meta.name}`,
-          });
-        }
-      }
-    } catch {
-      // skills dir unreadable
-    }
-  }
-
-  // Scan plugin skills: ~/.copilot/installed-plugins/*/skills/*/SKILL.md
-  let enabledPlugins = {};
-  try {
-    const settingsPath = join(home, ".copilot", "settings.json");
-    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-    enabledPlugins = settings.enabledPlugins || {};
-  } catch {
-    // can't read settings
-  }
-
-  const pluginsDir = join(home, ".copilot", "installed-plugins");
-  if (existsSync(pluginsDir)) {
-    try {
-      for (const marketplace of readdirSync(pluginsDir, {
-        withFileTypes: true,
-      })) {
-        if (!marketplace.isDirectory()) continue;
-        const marketDir = join(pluginsDir, marketplace.name);
-        for (const plugin of readdirSync(marketDir, { withFileTypes: true })) {
-          if (!plugin.isDirectory()) continue;
-
-          // Check if this plugin is enabled
-          const pluginKey =
-            marketplace.name === "_direct"
-              ? plugin.name.split("--").pop()
-              : `${plugin.name}@${marketplace.name}`;
-          const isEnabled = Object.entries(enabledPlugins).some(
-            ([k, v]) => v && (k === pluginKey || k === plugin.name)
-          );
-          if (!isEnabled) continue;
-
-          const pluginSkillsDir = join(marketDir, plugin.name, "skills");
-          if (!existsSync(pluginSkillsDir)) continue;
-
-          const pluginName =
-            marketplace.name === "_direct"
-              ? plugin.name.split("--").pop()
-              : plugin.name;
-
-          for (const skill of readdirSync(pluginSkillsDir, {
-            withFileTypes: true,
-          })) {
-            if (!skill.isDirectory()) continue;
-            const skillMd = join(pluginSkillsDir, skill.name, "SKILL.md");
-            const meta = parseSkillFrontmatter(skillMd);
-            if (meta) {
-              const invocation = `/${pluginName}:${meta.name}`;
-              if (!seen.has(invocation)) {
-                seen.add(invocation);
-                skills.push({
-                  name: `${pluginName}:${meta.name}`,
-                  description: meta.description,
-                  invocation,
-                });
-              }
-            }
-          }
-        }
-      }
-    } catch {
-      // plugins dir unreadable
-    }
-  }
-
-  skills.sort((a, b) => a.name.localeCompare(b.name));
-  return skills;
 }
 
 /**
@@ -481,16 +359,6 @@ const session = await joinSession({
             message: `Original: ${rawInput}`,
           });
 
-          // Discover available skills for the selector
-          const availableSkills = discoverSkills();
-          const skillOptions = [
-            { const: "", title: "(None)" },
-            ...availableSkills.map((s) => ({
-              const: s.invocation,
-              title: `${s.name} — ${s.description}`.slice(0, 100),
-            })),
-          ];
-
           let result;
           let currentPrompt = rewrittenPrompt;
           const feedbackHistory = [];
@@ -509,14 +377,6 @@ const session = await joinSession({
                       title: "Rewritten Prompt",
                       description: "Edit this prompt before sending",
                       default: currentPrompt,
-                    },
-                    skill: {
-                      type: "string",
-                      title: "Target Skill",
-                      description:
-                        "Select a skill to route this prompt to (optional)",
-                      default: "",
-                      oneOf: skillOptions,
                     },
                     feedback: {
                       type: "string",
@@ -611,12 +471,6 @@ const session = await joinSession({
             return;
           }
 
-          // Prepend selected skill invocation
-          const selectedSkill = result.content?.skill || "";
-          if (selectedSkill) {
-            finalPrompt = `${selectedSkill} ${finalPrompt}`;
-          }
-
           // Forward with attachments if we found any
           const sendPayload = { prompt: finalPrompt };
           if (recentAttachments.length > 0) {
@@ -629,11 +483,8 @@ const session = await joinSession({
             recentAttachments.length > 0
               ? ` (with ${recentAttachments.length} image${recentAttachments.length > 1 ? "s" : ""})`
               : "";
-          const skillNote = selectedSkill
-            ? ` → ${selectedSkill}`
-            : "";
           await session.rpc.log({
-            message: `Prompt: sent rewritten prompt to agent${skillNote}${imgNote}.`,
+            message: `Prompt: sent rewritten prompt to agent${imgNote}.`,
           });
         } catch (err) {
           try {
