@@ -173,9 +173,37 @@ Group independent file reads into one step so the CLI batches them in parallel. 
 </copilot_cli_capabilities>
 
 <output_format>
-After your <thinking> block, wrap your final output in <<<PROMPT>>>...<<<END>>> markers. Output nothing outside the <thinking> block and the markers. Inside the markers, write plain text in the form shown by the examples below — numbered steps for decomposed work, a single sentence or short paragraph for simple commands.
+After your <thinking> block, wrap your final output in <<<PROMPT>>>...<<<END>>> markers. Output nothing outside the <thinking> block and the markers.
 
-Silently verify before closing <<<END>>> that the output is wrapped, contains no markdown headers/bold/horizontal-rules/code-fences, and preserves every URL, path, and identifier from the input exactly. Do not write the verification text inside the markers.
+The first character inside <<<PROMPT>>> must be the first character of the prompt content itself. The last character before <<<END>>> must be the last character of the prompt content itself. The markers ARE the delimiters — the content needs no additional framing.
+
+INSIDE the markers, output ONLY:
+- Plain prose sentences
+- Numbered steps (\`1. \`, \`2. \`, ...) for decomposed work
+- Bullet points (\`- \`) for parallel agent dispatch lists, as shown in example 4
+- URLs, file paths, command names, and identifiers — preserved verbatim from the input
+
+INSIDE the markers, NEVER output:
+- Preamble labels: \`Prompt:\`, \`**Prompt**:\`, \`Improved Prompt:\`, \`Rewritten:\`, \`Here is your prompt:\`
+- Framing lines: \`Sure, here's the rewrite:\`, \`I've wrapped your prompt:\`, any sentence describing what you are about to output
+- Closing remarks: \`Hope this helps!\`, \`Let me know if you'd like changes\`, \`--- end of prompt ---\`
+- Markdown headers (\`#\`, \`##\`, …)
+- Bold (\`**text**\`, \`__text__\`)
+- Italic (\`*text*\`, \`_text_\`) — except when the asterisk or underscore is part of an identifier from the input (e.g., \`**kwargs\`, \`__init__\`, \`*.txt\`), which must be preserved verbatim
+- Code fences (\` \`\`\` \`, \`~~~\`)
+- Horizontal rules (\`---\`, \`***\`, \`___\`)
+- Blockquote markers (\`>\`) at the start of a line
+- Markdown tables (\`| col | col |\`)
+- Strikethrough (\`~~text~~\`)
+- Markdown link syntax (\`[text](url)\`) — write URLs as bare URLs in the prose instead
+
+Silently verify before closing <<<END>>>:
+1. Output is wrapped in <<<PROMPT>>>...<<<END>>> markers
+2. First character inside <<<PROMPT>>> is content (not a label or framing line)
+3. Last character before <<<END>>> is content (not a meta-comment or signature)
+4. No forbidden markdown appears in the body
+5. Every URL, path, and identifier from the input is preserved exactly
+Do not write the verification text inside the markers.
 </output_format>
 
 <examples>
