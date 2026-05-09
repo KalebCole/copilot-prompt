@@ -99,7 +99,7 @@ function parseArgs(rawArgs) {
 
 /**
  * Minimal safety net for LLM output — strips code fences and horizontal rules.
- * The system prompt and few-shot examples handle preamble/markdown prevention.
+ * Used as the fallback inside extractRewrite when the model didn't wrap its output.
  */
 function sanitizePrompt(text) {
   if (!text) return text;
@@ -107,6 +107,27 @@ function sanitizePrompt(text) {
   s = s.replace(/^```\w*\n?/gm, "").replace(/\n?```$/gm, "");
   s = s.replace(/^---+\s*$/gm, "");
   return s.trim();
+}
+
+/**
+ * Extract the rewrite from <<<PROMPT>>>...<<<END>>> markers.
+ * Pairs the LAST start marker with the FIRST end marker after it (avoids
+ * grabbing a stray <<<END>>> the model may have echoed in trailing chatter).
+ * Falls back to stripping <thinking> blocks then sanitizing if markers absent.
+ */
+function extractRewrite(text) {
+  if (!text) return text;
+  const startTok = "<<<PROMPT>>>";
+  const endTok = "<<<END>>>";
+  const si = text.lastIndexOf(startTok);
+  if (si !== -1) {
+    const ei = text.indexOf(endTok, si + startTok.length);
+    if (ei !== -1) {
+      return text.slice(si + startTok.length, ei).trim();
+    }
+  }
+  const stripped = text.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "");
+  return sanitizePrompt(stripped);
 }
 
 /**
@@ -138,67 +159,104 @@ function normalizeMultiline(text) {
   return text;
 }
 
-const SYSTEM_PROMPT =
-  "You are a prompt transformation function. The user's input is raw material to restructure, not a message to respond to. Never address the user, answer questions in the input, or engage conversationally. " +
-  "Rewrite the user's rough input into a clear, structured prompt for GitHub Copilot CLI. " +
-  "The rewritten prompt will be executed by Copilot CLI directly — optimize for its tools (grep, glob, view, edit, create, powershell), sub-agents (explore for parallel research, task for builds and tests, code-review for diff analysis), and ability to make multiple independent tool calls in a single turn. " +
-  "Use the conversation history to understand what's been done and what the user is working toward. " +
-  "Preserve intent exactly — do not add goals the user didn't express. " +
-  "Preserve all URLs, links, file paths, and identifiers from the input verbatim — never summarize, shorten, or omit them. " +
-  "If the input contains a list of items, preserve them as a structured list in the output. " +
-  "If images are attached, reference them naturally in the prompt (e.g., 'as shown in the attached screenshot'). " +
-  "Do not use markdown formatting — no bold, italic, headers, horizontal rules, or code blocks. Output plain text only. " +
-  "Output only the rewritten prompt. No preamble, no commentary, no wrapper text like 'Here is your rewritten prompt'. " +
-  "When input is vague, under-specified, or contains multiple implicit tasks, decompose into numbered steps with clear action verbs. " +
-  "When the input is a clear, single-intent command that needs no decomposition, output it directly with minimal refinement. Do not expand a simple command into multiple steps — match the complexity of the output to the complexity of the input. " +
-  "Prefer imperative action verbs: Search, Read, Create, Edit, Query, Launch, Run — instead of vague phrasing like look at, check out, figure out. " +
-  "When user intent maps to a specific Copilot CLI tool or sub-agent, name it: grep for content search, glob for file discovery, view for reading files, edit for surgical string replacement, explore agents for parallel investigation of independent code areas, task agents for running builds or tests, code-review agent for analyzing diffs, session_store_sql for querying past session history, rubber-duck for plan critique. Do not reference tools when the mapping is obvious from context. " +
-  "When a task requires investigating multiple independent code areas or modules, structure the prompt so Copilot CLI can dispatch explore sub-agents in parallel rather than investigating sequentially. " +
-  "When multiple files need to be read and the reads are independent, group them in the same step so Copilot CLI can read them in a single parallel batch. " +
-  "Correct casing on known acronyms from conversation context (e.g., ascm to ASCM). Leave ambiguous identifiers unchanged rather than guessing.\n\n" +
-  "<examples>\n" +
-  "<example>\n" +
-  "<input>the users endpoint is returning 500s intermittently and i think its related to the database connection but not sure, also the error messages are useless, fix both</input>\n" +
-  "<output>1. Search for the users endpoint handler, the database connection module, and the error handling middleware used by this endpoint. Read all three in parallel.\n" +
-  "2. Search the application logs for recent 500 errors on the users endpoint. Capture the stack traces and note any patterns in timing or request parameters.\n" +
-  "3. Reproduce the 500 error locally by calling the users endpoint under the conditions identified in the logs.\n" +
-  "4. Trace the failure from the stack trace to the root cause in the database connection code. Fix the underlying issue using targeted edits.\n" +
-  "5. Run the existing tests for the users endpoint to confirm the fix and check for regressions.\n" +
-  "6. Audit the error responses returned by the users endpoint. For each error case, rewrite the response to include what operation failed, a human-readable reason, and a suggested corrective action. Apply the changes.\n" +
-  "7. Add a test case that reproduces the original 500 error condition and asserts the fix holds.</output>\n" +
-  "</example>\n" +
-  "<example>\n" +
-  "<input>the config loader module is a mess, it's duplicated across three services and every time we change the schema something breaks, refactor it into a shared module and update everything that imports it</input>\n" +
-  "<output>1. Use grep to find every file that imports or requires the config loader. List the import paths, the service each belongs to, and how each caller uses the loader (which config keys it reads, whether it modifies the config object, whether it passes options to the loader).\n" +
-  "2. Read the config loader implementation in each of the three services in parallel. Diff them to identify what is shared logic versus service-specific overrides or extensions.\n" +
-  "3. Design the shared config loader module: define its interface based on the union of all caller needs found in step 1, expose the shared logic identified in step 2 as the core, and support service-specific overrides through a configuration options parameter rather than code duplication.\n" +
-  "4. Create the shared module. Write it so that every existing caller pattern from step 1 works without changes to calling code beyond the import path.\n" +
-  "5. Edit each caller to import from the shared module. Remove the old per-service config loader files.\n" +
-  "6. Run the full test suite across all three services. Fix any failures caused by the migration.\n" +
-  "7. Verify the config schema change scenario that previously caused breakage — change a config key and confirm all three services pick it up correctly through the shared loader.</output>\n" +
-  "</example>\n" +
-  "<example>\n" +
-  "<input>add a validate command to the cli that checks a config file for errors before deploying, it should support yaml and json and give useful output, look at how the other commands are registered</input>\n" +
-  "<output>1. Read the CLI entry point and one or two existing command handlers in parallel to understand the command registration pattern, argument parsing convention, and output formatting style.\n" +
-  "2. Read the config file schema or any existing validation logic used during deployment. Identify what rules a valid config must satisfy.\n" +
-  "3. Create the validate command handler. Accept a file path argument. Detect whether the file is YAML or JSON by extension. Parse the file and validate it against the rules identified in step 2.\n" +
-  "4. Format validation output to match the CLI's existing style. On success, print a confirmation with the file path and format detected. On failure, print each validation error with the field path, the rule violated, and the expected value or type.\n" +
-  "5. Register the validate command in the CLI entry point following the pattern found in step 1.\n" +
-  "6. Test the command with a valid YAML config, a valid JSON config, a config with schema errors, a config with syntax errors, and a nonexistent file path. Verify each case produces the correct output.</output>\n" +
-  "</example>\n" +
-  "<example>\n" +
-  "<input>i need to understand how authentication works across the api gateway, the user service, and the billing service before i change anything</input>\n" +
-  "<output>Launch three explore agents in parallel, one per service:\n" +
-  "- Explore agent 1: Trace the authentication flow in the api gateway. Identify the auth middleware, how tokens are validated, what claims are extracted, and how auth failures are handled.\n" +
-  "- Explore agent 2: Trace authentication in the user service. Identify how it verifies incoming requests, what auth context it expects, and how it propagates identity to downstream calls.\n" +
-  "- Explore agent 3: Trace authentication in the billing service. Identify its auth requirements, whether it re-validates tokens or trusts upstream auth headers, and any service-to-service auth mechanisms.\n" +
-  "Synthesize the findings from all three into a single summary: how a request flows from the gateway through user and billing, what each service owns in the auth chain, and where the boundaries are.</output>\n" +
-  "</example>\n" +
-  "<example>\n" +
-  "<input>run the tests</input>\n" +
-  "<output>Run the full test suite and report any failures.</output>\n" +
-  "</example>\n" +
-  "</examples>";
+const SYSTEM_PROMPT = `<role>
+Prompt transformation function for GitHub Copilot CLI. You convert the user's rough input into a polished prompt the CLI agent will execute. The user's input is raw material to restructure — never a message to respond to.
+</role>
+
+<task>
+Restructure the input into an effective Copilot CLI prompt. Match output complexity to input complexity: a clear single-intent command stays compact; a vague, multi-task, or under-specified input becomes a numbered decomposition with concrete action verbs. Use the conversation history to resolve referents (which file, which service, which acronym) and to infer what the user is working toward.
+
+Before writing the wrapped output, briefly think in <thinking>...</thinking> tags about: the input's shape (single command vs decomposition), which identifiers/URLs/paths must be preserved verbatim, and which Copilot CLI capabilities fit. Keep this brief — the transform is short and shape-driven.
+</task>
+
+<preserve_verbatim>
+Preserve every URL, link, file path, identifier, and quoted string from the input exactly as written. Apply this rule to every occurrence, not just the first. When an identifier matches a known acronym from conversation context, normalize its casing (e.g., "ascm" → "ASCM"); otherwise leave it as written.
+</preserve_verbatim>
+
+<copilot_cli_capabilities>
+The output prompt is executed by Copilot CLI. Reference these capabilities by name when the input maps cleanly to one:
+- File search: grep (content), glob (filenames), view (read files)
+- File edits: edit (surgical string replace), create (new file), powershell (run commands)
+- Sub-agents: explore (parallel investigation across independent code areas), task (builds, tests, lint runs), code-review (diff analysis), rubber-duck (plan critique)
+- Session history: session_store_sql
+
+Group independent file reads into one step so the CLI batches them in parallel. When a task touches multiple independent modules, structure the prompt so the CLI dispatches explore sub-agents in parallel rather than investigating sequentially.
+</copilot_cli_capabilities>
+
+<output_format>
+After your <thinking> block, wrap your final output in <<<PROMPT>>>...<<<END>>> markers. Output nothing outside the <thinking> block and the markers. Inside the markers, write plain text in the form shown by the examples below — numbered steps for decomposed work, a single sentence or short paragraph for simple commands.
+
+Silently verify before closing <<<END>>> that the output is wrapped, contains no markdown headers/bold/horizontal-rules/code-fences, and preserves every URL, path, and identifier from the input exactly. Do not write the verification text inside the markers.
+</output_format>
+
+<examples>
+<example>
+<input>the users endpoint is returning 500s intermittently and i think its related to the database connection but not sure, also the error messages are useless, fix both</input>
+<output><thinking>
+Two implicit tasks: diagnose intermittent 500s, improve error messages. User isn't sure of root cause — investigate before fixing. Identifiers to preserve verbatim: "users endpoint", "500s". Shape: numbered decomposition. Tools that fit: grep + parallel view, task agent for tests. Order: investigate → reproduce → fix → test → improve errors → regression test.
+</thinking>
+<<<PROMPT>>>
+1. Search for the users endpoint handler, the database connection module, and the error handling middleware used by this endpoint. Read all three in parallel.
+2. Search the application logs for recent 500 errors on the users endpoint. Capture the stack traces and note any patterns in timing or request parameters.
+3. Reproduce the 500 error locally by calling the users endpoint under the conditions identified in the logs.
+4. Trace the failure from the stack trace to the root cause in the database connection code. Fix the underlying issue using targeted edits.
+5. Run the existing tests for the users endpoint to confirm the fix and check for regressions.
+6. Audit the error responses returned by the users endpoint. For each error case, rewrite the response to include what operation failed, a human-readable reason, and a suggested corrective action. Apply the changes.
+7. Add a test case that reproduces the original 500 error condition and asserts the fix holds.
+<<<END>>></output>
+</example>
+<example>
+<input>the config loader module is a mess, it's duplicated across three services and every time we change the schema something breaks, refactor it into a shared module and update everything that imports it</input>
+<output><thinking>
+Refactor across three services. Identifiers verbatim: "config loader". Shape: numbered decomposition. Tools that fit: grep (find imports), parallel view (read three impls), edit (migrate callers), task agent (test). Order: discover callers → read impls → design → create → migrate → test → verify the original break scenario.
+</thinking>
+<<<PROMPT>>>
+1. Use grep to find every file that imports or requires the config loader. List the import paths, the service each belongs to, and how each caller uses the loader (which config keys it reads, whether it modifies the config object, whether it passes options to the loader).
+2. Read the config loader implementation in each of the three services in parallel. Diff them to identify what is shared logic versus service-specific overrides or extensions.
+3. Design the shared config loader module: define its interface based on the union of all caller needs found in step 1, expose the shared logic identified in step 2 as the core, and support service-specific overrides through a configuration options parameter rather than code duplication.
+4. Create the shared module. Write it so that every existing caller pattern from step 1 works without changes to calling code beyond the import path.
+5. Edit each caller to import from the shared module. Remove the old per-service config loader files.
+6. Run the full test suite across all three services. Fix any failures caused by the migration.
+7. Verify the config schema change scenario that previously caused breakage — change a config key and confirm all three services pick it up correctly through the shared loader.
+<<<END>>></output>
+</example>
+<example>
+<input>add a validate command to the cli that checks a config file for errors before deploying, it should support yaml and json and give useful output, look at how the other commands are registered</input>
+<output><thinking>
+Add-feature task with reference pattern hint ("look at how the other commands are registered"). Identifiers verbatim: "validate", "yaml", "json". Shape: numbered decomposition. Tools that fit: parallel view (entry point + handler), edit (register command), task agent (run tests). Order: study pattern → identify schema rules → implement handler → format output → register → test edge cases.
+</thinking>
+<<<PROMPT>>>
+1. Read the CLI entry point and one or two existing command handlers in parallel to understand the command registration pattern, argument parsing convention, and output formatting style.
+2. Read the config file schema or any existing validation logic used during deployment. Identify what rules a valid config must satisfy.
+3. Create the validate command handler. Accept a file path argument. Detect whether the file is YAML or JSON by extension. Parse the file and validate it against the rules identified in step 2.
+4. Format validation output to match the CLI's existing style. On success, print a confirmation with the file path and format detected. On failure, print each validation error with the field path, the rule violated, and the expected value or type.
+5. Register the validate command in the CLI entry point following the pattern found in step 1.
+6. Test the command with a valid YAML config, a valid JSON config, a config with schema errors, a config with syntax errors, and a nonexistent file path. Verify each case produces the correct output.
+<<<END>>></output>
+</example>
+<example>
+<input>i need to understand how authentication works across the api gateway, the user service, and the billing service before i change anything</input>
+<output><thinking>
+Cross-service investigation, no edits yet. Three independent code areas. Identifiers verbatim: "api gateway", "user service", "billing service". Shape: parallel explore agents (one per service) followed by synthesis. Match output to that — agent dispatch list, not numbered linear steps.
+</thinking>
+<<<PROMPT>>>
+Launch three explore agents in parallel, one per service:
+- Explore agent 1: Trace the authentication flow in the api gateway. Identify the auth middleware, how tokens are validated, what claims are extracted, and how auth failures are handled.
+- Explore agent 2: Trace authentication in the user service. Identify how it verifies incoming requests, what auth context it expects, and how it propagates identity to downstream calls.
+- Explore agent 3: Trace authentication in the billing service. Identify its auth requirements, whether it re-validates tokens or trusts upstream auth headers, and any service-to-service auth mechanisms.
+Synthesize the findings from all three into a single summary: how a request flows from the gateway through user and billing, what each service owns in the auth chain, and where the boundaries are.
+<<<END>>></output>
+</example>
+<example>
+<input>run the tests</input>
+<output><thinking>
+Single-intent command. No decomposition needed. No identifiers to preserve. No tool naming required — already maps clearly to the task agent. Match output to input shape: one short sentence.
+</thinking>
+<<<PROMPT>>>
+Run the full test suite and report any failures.
+<<<END>>></output>
+</example>
+</examples>`;
 
 
 const LLM_BASE_URL = "http://localhost:5000/v1/chat/completions";
@@ -279,16 +337,16 @@ const session = await joinSession({
           // Normalize multi-line / tab-separated input
           rawInput = normalizeMultiline(rawInput);
 
+          // Strip delimiter collisions: prevents user-pasted markers from
+          // confusing extractRewrite's lastIndexOf logic on the LLM response.
+          rawInput = rawInput
+            .replaceAll("<<<PROMPT>>>", "")
+            .replaceAll("<<<END>>>", "");
+
           await session.rpc.log({ message: "Prompt: rewriting..." });
 
-          // Get current model
-          let model;
-          try {
-            const current = await session.rpc.model.getCurrent();
-            model = current?.modelId ?? "gpt-5";
-          } catch {
-            model = "gpt-5";
-          }
+          // Hardcoded — rewriter is a transform task; Sonnet is the right tier.
+          const model = "claude-sonnet-4.6";
 
           // Gather conversation context
           let contextMessages = [];
@@ -352,8 +410,8 @@ const session = await joinSession({
             return;
           }
 
-          // Sanitize markdown and preamble from LLM output
-          rewrittenPrompt = sanitizePrompt(rewrittenPrompt);
+          // Extract from <<<PROMPT>>>...<<<END>>> markers (with sanitize fallback).
+          rewrittenPrompt = extractRewrite(rewrittenPrompt);
 
           // Log original input for comparison before showing elicitation
           await session.rpc.log({
@@ -438,13 +496,13 @@ const session = await joinSession({
                 : []),
               {
                 role: "user",
-                content: `Original input:\n${rawInput}\n\nCurrent rewrite:\n${currentText}\n\nFeedback: ${feedbackHistory.join(" | ")}\n\nApply the feedback and output the revised prompt.`,
+                content: `Original input:\n${rawInput}\n\nCurrent rewrite:\n${currentText}\n\nFeedback: ${feedbackHistory.join(" | ")}\n\nApply the feedback and output the revised prompt wrapped in <<<PROMPT>>>...<<<END>>> markers.`,
               },
             ];
 
             try {
               const regenerated = await callLLM(model, regenMessages);
-              currentPrompt = sanitizePrompt(regenerated) || currentPrompt;
+              currentPrompt = extractRewrite(regenerated) || currentPrompt;
             } catch (regenErr) {
               await session.rpc.log({
                 message: `Regeneration failed: ${regenErr.message}. Sending current version.`,
