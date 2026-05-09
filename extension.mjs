@@ -2,6 +2,7 @@ import { joinSession } from "@github/copilot-sdk/extension";
 import { execSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { sanitizePrompt } from "./lib/sanitize.mjs";
 
 function extractMessages(events) {
   const msgs = [];
@@ -95,18 +96,6 @@ function parseArgs(rawArgs) {
   }
 
   return { text, flags };
-}
-
-/**
- * Minimal safety net for LLM output — strips code fences and horizontal rules.
- * Used as the fallback inside extractRewrite when the model didn't wrap its output.
- */
-function sanitizePrompt(text) {
-  if (!text) return text;
-  let s = text;
-  s = s.replace(/^```\w*\n?/gm, "").replace(/\n?```$/gm, "");
-  s = s.replace(/^---+\s*$/gm, "");
-  return s.trim();
 }
 
 /**
