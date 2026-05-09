@@ -267,7 +267,7 @@ Synthesize the findings from all three into a single summary: how a request flow
 <example>
 <input>run the tests</input>
 <output><thinking>
-Single-intent command. No decomposition needed. No identifiers to preserve. No tool naming required — already maps clearly to the task agent. Match output to input shape: one short sentence.
+Single-intent command. No decomposition needed. No identifiers to preserve. No tool naming required — already maps clearly to the task agent. Match output to input shape: one short sentence. Verify: output begins immediately with the action verb (no "Prompt:" or "Here's:" label), ends with the last word of the instruction (no "Let me know..."), no markdown.
 </thinking>
 <<<PROMPT>>>
 Run the full test suite and report any failures.
