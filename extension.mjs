@@ -277,28 +277,6 @@ Run the full test suite and report any failures.
 </examples>`;
 // TODO: add in an example of an anti-pattern and what not to do.
 
-const LLM_BASE_URL = "http://localhost:5000/v1/chat/completions";
-
-async function callLLM(model, messages) {
-  const resp = await fetch(LLM_BASE_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: "Bearer dummy",
-    },
-    body: JSON.stringify({ model, messages }),
-    signal: AbortSignal.timeout(120_000),
-  });
-
-  if (!resp.ok) {
-    const body = await resp.text().catch(() => "");
-    throw new Error(`${resp.status} ${resp.statusText} — ${body.slice(0, 200)}`);
-  }
-
-  const json = await resp.json();
-  return json?.choices?.[0]?.message?.content ?? null;
-}
-
 const REWRITER_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 200;
 
@@ -470,9 +448,6 @@ const session = await joinSession({
 
           await session.rpc.log({ message: "Prompt: rewriting..." });
 
-          // Hardcoded — rewriter is a transform task; Sonnet is the right tier.
-          const model = "claude-sonnet-4.6";
-
           // Gather conversation context
           let contextMessages = [];
           let recentAttachments = [];
@@ -484,41 +459,11 @@ const session = await joinSession({
             // Continue without context
           }
 
-          // Build the user content — text + optional vision parts
-          const visionParts = buildVisionParts(recentAttachments);
-          let userContent;
-          if (visionParts.length > 0) {
-            userContent = [
-              {
-                type: "text",
-                text: `Rewrite this into an effective prompt:\n\n${rawInput}`,
-              },
-              ...visionParts,
-            ];
-          } else {
-            userContent = `Rewrite this into an effective prompt:\n\n${rawInput}`;
-          }
-
-          const messages = [
-            { role: "system", content: SYSTEM_PROMPT },
-            ...(contextMessages.length > 0
-              ? [
-                  {
-                    role: "system",
-                    content:
-                      "Here is the user's current conversation with their AI assistant for context:\n\n" +
-                      contextMessages
-                        .map((m) => `[${m.role.toUpperCase()}]: ${m.content}`)
-                        .join("\n\n"),
-                  },
-                ]
-              : []),
-            { role: "user", content: userContent },
-          ];
-
           let rewrittenPrompt;
           try {
-            rewrittenPrompt = await callLLM(model, messages);
+            rewrittenPrompt = await runRewriterAgent(
+              buildInitialPrompt(rawInput, contextMessages)
+            );
           } catch (apiErr) {
             await session.rpc.log({
               message: `Prompt error: ${apiErr.message}`,
@@ -603,30 +548,15 @@ const session = await joinSession({
                 ? result.content.prompt
                 : currentPrompt;
 
-            const regenMessages = [
-              { role: "system", content: SYSTEM_PROMPT },
-              ...(contextMessages.length > 0
-                ? [
-                    {
-                      role: "system",
-                      content:
-                        "Here is the user's current conversation with their AI assistant for context:\n\n" +
-                        contextMessages
-                          .map(
-                            (m) => `[${m.role.toUpperCase()}]: ${m.content}`
-                          )
-                          .join("\n\n"),
-                    },
-                  ]
-                : []),
-              {
-                role: "user",
-                content: `Original input:\n${rawInput}\n\nCurrent rewrite:\n${currentText}\n\nFeedback: ${feedbackHistory.join(" | ")}\n\nApply the feedback and output the revised prompt wrapped in <<<PROMPT>>>...<<<END>>> markers.`,
-              },
-            ];
-
             try {
-              const regenerated = await callLLM(model, regenMessages);
+              const regenerated = await runRewriterAgent(
+                buildRegenPrompt(
+                  rawInput,
+                  currentText,
+                  feedbackHistory,
+                  contextMessages
+                )
+              );
               currentPrompt = extractRewrite(regenerated) || currentPrompt;
             } catch (regenErr) {
               await session.rpc.log({
