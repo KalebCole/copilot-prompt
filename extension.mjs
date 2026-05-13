@@ -159,9 +159,10 @@ Before writing the wrapped output, briefly think in <thinking>...</thinking> tag
 </task>
 
 <preserve_verbatim>
-Preserve every URL, link, file path, identifier, and quoted string from the input exactly as written. Apply this rule to every occurrence, not just the first. When an identifier matches a known acronym from conversation context, normalize its casing (e.g., "ascm" → "ASCM"); otherwise leave it as written.
+Preserve every URL, link, file path, identifier, and quoted string from the input exactly as written. Apply this rule to every occurrence, not just the first. When an identifier matches a known acronym from conversation context, normalize its casing (e.g., "rdp" → "RDP"); otherwise leave it as written.
 </preserve_verbatim>
 
+// TODO: change this system prompt to be modular. could i make this copilot cli capabilites section be called <harness></harness> and have this be dyanmic based on what harness? so i include more copilot cli specific tool calls
 <copilot_cli_capabilities>
 The output prompt is executed by Copilot CLI. Reference these capabilities by name when the input maps cleanly to one:
 - File search: grep (content), glob (filenames), view (read files)
@@ -274,7 +275,7 @@ Run the full test suite and report any failures.
 <<<END>>></output>
 </example>
 </examples>`;
-
+// TODO: add in an example of an anti-pattern and what not to do.
 
 const LLM_BASE_URL = "http://localhost:5000/v1/chat/completions";
 
@@ -299,10 +300,20 @@ async function callLLM(model, messages) {
 }
 
 const session = await joinSession({
+  customAgents: [
+    {
+      name: "prompt-rewriter",
+      description: "Rewrites rough input into polished Copilot CLI prompts.",
+      prompt: SYSTEM_PROMPT,
+      tools: [],
+      infer: true,
+    },
+  ],
   commands: [
     {
       name: "prompt",
-      description:
+      // TODO: update this and remove the support multi-lien, tabs , .... jsut kep first sentence
+      description: 
         "Rewrite rough input into a polished prompt. Supports multi-line, tabs, --file, --clipboard, and images.",
       handler: async (ctx) => {
         try {
