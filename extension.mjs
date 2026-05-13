@@ -299,6 +299,103 @@ async function callLLM(model, messages) {
   return json?.choices?.[0]?.message?.content ?? null;
 }
 
+const REWRITER_TIMEOUT_MS = 120_000;
+const POLL_INTERVAL_MS = 200;
+
+function buildInitialPrompt(rawInput, contextMessages) {
+  let p = "";
+  if (contextMessages.length > 0) {
+    p += "Here is the user's current conversation with their AI assistant for context:\n\n";
+    p += contextMessages
+      .map((m) => `[${m.role.toUpperCase()}]: ${m.content}`)
+      .join("\n\n");
+    p += "\n\n";
+  }
+  p += `Rewrite this into an effective prompt. Wrap your final output in <<<PROMPT>>>...<<<END>>> markers per your instructions.\n\n${rawInput}`;
+  return p;
+}
+
+function buildRegenPrompt(rawInput, currentText, feedbackHistory, contextMessages) {
+  let p = "";
+  if (contextMessages.length > 0) {
+    p += "Here is the user's current conversation with their AI assistant for context:\n\n";
+    p += contextMessages
+      .map((m) => `[${m.role.toUpperCase()}]: ${m.content}`)
+      .join("\n\n");
+    p += "\n\n";
+  }
+  p += `Original input:\n${rawInput}\n\n`;
+  p += `Current rewrite:\n${currentText}\n\n`;
+  p += `Feedback: ${feedbackHistory.join(" | ")}\n\n`;
+  p += `Apply the feedback and output the revised prompt wrapped in <<<PROMPT>>>...<<<END>>> markers.`;
+  return p;
+}
+
+async function runRewriterAgent(userPrompt) {
+  const { agentId } = await session.rpc.tasks.startAgent({
+    agentType: "prompt-rewriter",
+    prompt: userPrompt,
+    name: "rewrite",
+    description: "Rewriting prompt",
+    model: "claude-sonnet-4.6",
+  });
+
+  const deadline = Date.now() + REWRITER_TIMEOUT_MS;
+  let lastObserved = null;
+
+  try {
+    while (true) {
+      if (Date.now() > deadline) {
+        throw new Error(`Rewriter task timed out after ${REWRITER_TIMEOUT_MS}ms`);
+      }
+
+      const { tasks } = await session.rpc.tasks.list();
+      const t = tasks.find(
+        (x) =>
+          x.type === "agent" &&
+          x.id === agentId &&
+          x.agentType === "prompt-rewriter"
+      );
+
+      if (!t) {
+        const visible = tasks
+          .filter((x) => x.type === "agent")
+          .map((x) => `${x.id}/${x.agentType}/${x.status}`)
+          .join(", ");
+        throw new Error(
+          `Rewriter task ${agentId} missing from tasks.list. Visible agents: [${visible}]`
+        );
+      }
+
+      lastObserved = t;
+
+      if (t.status === "completed" || t.status === "idle") {
+        return t.result ?? t.latestResponse ?? "";
+      }
+      if (t.status === "failed" || t.status === "cancelled") {
+        throw new Error(t.error ?? `Rewriter task ${t.status}`);
+      }
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    }
+  } finally {
+    // Best-effort cleanup. Non-terminal tasks must be cancelled before remove
+    // succeeds (TasksRemoveResult.removed is false for running/idle tasks per
+    // rpc.d.ts:1900-1904). All errors here are swallowed — cleanup must not throw.
+    try {
+      const needsCancel =
+        !lastObserved ||
+        lastObserved.status === "idle" ||
+        lastObserved.status === "running";
+      if (needsCancel) {
+        await session.rpc.tasks.cancel({ id: agentId }).catch(() => {});
+      }
+      await session.rpc.tasks.remove({ id: agentId }).catch(() => {});
+    } catch {
+      // swallow
+    }
+  }
+}
+
 const session = await joinSession({
   customAgents: [
     {
