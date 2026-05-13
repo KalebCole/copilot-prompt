@@ -25,55 +25,6 @@ function extractMessages(events) {
 }
 
 /**
- * Scan recent user messages for image attachments.
- * Stops at the first user.message without attachments (only grabs the latest batch).
- */
-function extractRecentAttachments(events) {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i];
-    if (e.type === "user.message") {
-      if (e.data?.attachments?.length) return e.data.attachments;
-      break; // most recent user msg had no attachments — stop
-    }
-  }
-  return [];
-}
-
-/**
- * Convert attachments into OpenAI vision-format content parts.
- */
-function buildVisionParts(attachments) {
-  const parts = [];
-  for (const att of attachments) {
-    // Handle base64 data
-    if (att.data) {
-      const mime = att.mimeType || att.mediaType || "image/png";
-      parts.push({
-        type: "image_url",
-        image_url: { url: `data:${mime};base64,${att.data}` },
-      });
-    // Handle URL-based attachments
-    } else if (att.url) {
-      parts.push({ type: "image_url", image_url: { url: att.url } });
-    // Handle file path attachments
-    } else if (att.path || att.filePath) {
-      const p = att.path || att.filePath;
-      try {
-        const data = readFileSync(p).toString("base64");
-        const mime = att.mimeType || att.mediaType || "image/png";
-        parts.push({
-          type: "image_url",
-          image_url: { url: `data:${mime};base64,${data}` },
-        });
-      } catch {
-        // skip unreadable files
-      }
-    }
-  }
-  return parts;
-}
-
-/**
 //  TODO: we are not passing in files and clipboards
  * Parse --file and --clipboard flags from raw args.
  * Returns { text, flags }.
@@ -389,7 +340,7 @@ const session = await joinSession({
       name: "prompt",
       // TODO: update this and remove the support multi-lien, tabs , .... jsut kep first sentence
       description: 
-        "Rewrite rough input into a polished prompt. Supports multi-line, tabs, --file, --clipboard, and images.",
+        "Rewrite rough input into a polished prompt. Supports multi-line, tabs, --file, and --clipboard.",
       handler: async (ctx) => {
         try {
           const { text: remainingText, flags } = parseArgs(ctx.args?.trim());
@@ -432,7 +383,7 @@ const session = await joinSession({
           if (!rawInput) {
             await session.rpc.log({
               message:
-                "Usage: /prompt <text>\n       /prompt --file <path>\n       /prompt --clipboard\n       Paste an image first, then /prompt <text> to include it.",
+                "Usage: /prompt <text>\n       /prompt --file <path>\n       /prompt --clipboard",
             });
             return;
           }
@@ -450,11 +401,9 @@ const session = await joinSession({
 
           // Gather conversation context
           let contextMessages = [];
-          let recentAttachments = [];
           try {
             const events = await session.getMessages();
             contextMessages = extractMessages(events);
-            recentAttachments = extractRecentAttachments(events);
           } catch {
             // Continue without context
           }
@@ -585,20 +534,10 @@ const session = await joinSession({
             return;
           }
 
-          // Forward with attachments if we found any
-          const sendPayload = { prompt: finalPrompt };
-          if (recentAttachments.length > 0) {
-            sendPayload.attachments = recentAttachments;
-          }
+          await session.send({ prompt: finalPrompt });
 
-          await session.send(sendPayload);
-
-          const imgNote =
-            recentAttachments.length > 0
-              ? ` (with ${recentAttachments.length} image${recentAttachments.length > 1 ? "s" : ""})`
-              : "";
           await session.rpc.log({
-            message: `Prompt: sent rewritten prompt to agent${imgNote}.`,
+            message: `Prompt: sent rewritten prompt to agent.`,
           });
         } catch (err) {
           try {
