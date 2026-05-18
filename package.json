@@ -1,0 +1,11 @@
+{
+  "name": "copilot-prompt",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Copilot CLI extension: /prompt rewrites rough input into a polished prompt in a context-isolated side conversation.",
+  "scripts": {
+    "test": "node --test test/*.mjs",
+    "test:watch": "node --test --watch test/*.mjs"
+  }
+}
