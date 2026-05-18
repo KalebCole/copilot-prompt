@@ -48,7 +48,7 @@ function extractRewrite(text) {
   const stripped = text.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "");
   return sanitizePrompt(stripped);
 }
-
+// TODO: change this system prompt to be modular. could i make this copilot cli capabilites section be called <harness></harness> and have this be dyanmic based on what harness? so i include more copilot cli specific tool calls
 const SYSTEM_PROMPT = `<role>
 Prompt transformation function for GitHub Copilot CLI. You convert the user's rough input into a polished prompt the CLI agent will execute. The user's input is raw material to restructure — never a message to respond to.
 </role>
@@ -63,7 +63,6 @@ Before writing the wrapped output, briefly think in <thinking>...</thinking> tag
 Preserve every URL, link, file path, identifier, and quoted string from the input exactly as written. Apply this rule to every occurrence, not just the first. When an identifier matches a known acronym from conversation context, normalize its casing (e.g., "rdp" → "RDP"); otherwise leave it as written.
 </preserve_verbatim>
 
-// TODO: change this system prompt to be modular. could i make this copilot cli capabilites section be called <harness></harness> and have this be dyanmic based on what harness? so i include more copilot cli specific tool calls
 <copilot_cli_capabilities>
 The output prompt is executed by Copilot CLI. Reference these capabilities by name when the input maps cleanly to one:
 - File search: grep (content), glob (filenames), view (read files)
