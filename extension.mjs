@@ -1,7 +1,4 @@
 import { joinSession } from "@github/copilot-sdk/extension";
-import { execSync } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
 import { sanitizePrompt } from "./lib/sanitize.mjs";
 
 function extractMessages(events) {
@@ -25,28 +22,10 @@ function extractMessages(events) {
 }
 
 /**
-//  TODO: we are not passing in files and clipboards
- * Parse --file and --clipboard flags from raw args.
- * Returns { text, flags }.
+ * Trim raw command arguments. Returns the text the rewriter will see.
  */
 function parseArgs(rawArgs) {
-  let text = rawArgs || "";
-  const flags = {};
-
-  // --file "path" or --file path
-  const fileMatch = text.match(/--file\s+(?:"([^"]+)"|(\S+))/);
-  if (fileMatch) {
-    flags.file = fileMatch[1] || fileMatch[2];
-    text = text.replace(fileMatch[0], "").trim();
-  }
-
-  // --clipboard
-  if (text.includes("--clipboard")) {
-    flags.clipboard = true;
-    text = text.replace(/--clipboard/g, "").trim();
-  }
-
-  return { text, flags };
+  return (rawArgs || "").trim();
 }
 
 /**
@@ -68,35 +47,6 @@ function extractRewrite(text) {
   }
   const stripped = text.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "");
   return sanitizePrompt(stripped);
-}
-
-/**
- * Normalize multi-line / tab-separated text into a structured list.
- */
-function normalizeMultiline(text) {
-  if (!text) return text;
-
-  // If tabs are present, split on tabs and format as bullet list
-  if (text.includes("\t")) {
-    const items = text
-      .split(/[\t\n]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (items.length > 1) {
-      return items.map((item) => `- ${item}`).join("\n");
-    }
-  }
-
-  // If multi-line, clean up but preserve structure
-  if (text.includes("\n")) {
-    const lines = text
-      .split(/\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (lines.length > 1) return lines.join("\n");
-  }
-
-  return text;
 }
 
 const SYSTEM_PROMPT = `<role>
@@ -338,58 +288,17 @@ const session = await joinSession({
   commands: [
     {
       name: "prompt",
-      // TODO: update this and remove the support multi-lien, tabs , .... jsut kep first sentence
-      description: 
-        "Rewrite rough input into a polished prompt. Supports multi-line, tabs, --file, and --clipboard.",
+      description: "Rewrite rough input into a polished Copilot CLI prompt.",
       handler: async (ctx) => {
         try {
-          const { text: remainingText, flags } = parseArgs(ctx.args?.trim());
-
-          // Resolve input text from flags or direct args
-          let rawInput = remainingText;
-
-          if (flags.file) {
-            const filePath = resolve(flags.file);
-            if (!existsSync(filePath)) {
-              await session.rpc.log({
-                message: `File not found: ${filePath}`,
-                level: "error",
-              });
-              return;
-            }
-            const fileContent = readFileSync(filePath, "utf-8");
-            rawInput = rawInput
-              ? `${rawInput}\n\n${fileContent}`
-              : fileContent;
-          }
-
-          if (flags.clipboard) {
-            try {
-              const clip = execSync("powershell -NoProfile -c Get-Clipboard", {
-                encoding: "utf-8",
-                timeout: 5000,
-              }).trim();
-              if (clip) {
-                rawInput = rawInput ? `${rawInput}\n\n${clip}` : clip;
-              }
-            } catch {
-              await session.rpc.log({
-                message: "Could not read clipboard.",
-                level: "warning",
-              });
-            }
-          }
+          let rawInput = parseArgs(ctx.args);
 
           if (!rawInput) {
             await session.rpc.log({
-              message:
-                "Usage: /prompt <text>\n       /prompt --file <path>\n       /prompt --clipboard",
+              message: "Usage: /prompt <text>",
             });
             return;
           }
-
-          // Normalize multi-line / tab-separated input
-          rawInput = normalizeMultiline(rawInput);
 
           // Strip delimiter collisions: prevents user-pasted markers from
           // confusing extractRewrite's lastIndexOf logic on the LLM response.
