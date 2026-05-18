@@ -1,6 +1,6 @@
 # /prompt — Copilot CLI prompt rewriter
 
-A Copilot CLI slash command that rewrites your rough request into a
+A Copilot CLI extension that rewrites your rough request into a
 structured prompt **in a context-isolated side conversation**, so the
 rewriter's noise never enters your main agent's context.
 
@@ -13,7 +13,10 @@ sees the final polished prompt.
 
 ## Install
 
-Prerequisite: GitHub Copilot CLI installed and signed in.
+Prerequisite: 
+- GitHub Copilot CLI - https://github.com/features/copilot/cli
+- Expermimental mode turned on
+   - <img width="1740" height="347" alt="image" src="https://github.com/user-attachments/assets/ec3e5fc5-a226-434b-b559-3c386015d4ad" />
 
 PowerShell:
 ```pwsh
@@ -93,26 +96,6 @@ messages are useless, fix both
 Run the full test suite and report any failures.
 ```
 
-## What v0 does NOT do
-
-- **No file or clipboard ingestion.** Paste your input directly. Earlier
-  drafts had `--file` and `--clipboard` flags; they were half-finished
-  and removed for v0.
-- **No named transforms / templates / personas.** Coming in MVP-1 on the
-  in-flight `feat/prompt-transforms` branch.
-- **No model configuration.** Hardcoded to `claude-sonnet-4.6`.
-- **No batch mode.** One invocation = one rewrite cycle.
-
-## Troubleshooting
-
-- **"Elicitation UI not available"** — your CLI version doesn't ship the
-  elicitation transport. The extension falls back to logging the rewrite
-  so you can copy-paste it manually.
-- **"Rewriter task timed out"** — the rewriter took longer than 120s.
-  Usually model latency. Re-run.
-- **"Prompt: empty after sanitization. Nothing to send."** — the model
-  returned only markdown that the sanitizer stripped. Try rephrasing or
-  shortening your input.
 
 ## Uninstall
 
