@@ -87,13 +87,13 @@ elicitation review loop
 
 ## How to test
 
-From `extensions/prompt/`:
+From the repo root:
 ```
 npm test
 ```
-Or from the repo root:
+Or:
 ```
-node --test extensions/prompt/test/sanitize.test.mjs
+node --test test/sanitize.test.mjs
 ```
 Expected: 55 tests pass. There are no integration tests of the live
 slash command yet — exercise it manually inside Copilot CLI when
@@ -123,13 +123,11 @@ changing the handler.
 
 ## In-flight design work
 
-- Branch `feat/prompt-transforms` (PR #25) contains the in-progress
-  design for MVP-1 transforms (named preambles invoked as
-  `/prompt <transform> <text>`). Two files on that branch are the
-  source of truth for vocabulary and decisions:
-  - `extensions/prompt/CONTEXT.md` — domain language.
-  - `extensions/prompt/docs/adr/0001-transforms-are-not-skills.md` — ADR.
-  Brainstorming paused mid-design. Resume there before implementing.
+Mid-flight design notes for MVP-1 (named "transforms" invoked as
+`/prompt <name> <text>`) live in the author's private source-of-truth
+repo on the `feat/prompt-transforms` branch — `CONTEXT.md` (domain
+language) and `docs/adr/0001-transforms-are-not-skills.md` (ADR).
+This standalone repo will absorb that work after MVP-1 lands.
 
 ## Troubleshooting (implementation-side)
 

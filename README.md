@@ -20,16 +20,18 @@ PowerShell:
 # Remove any prior install first to avoid stale files
 Remove-Item -Recurse -Force ~/.copilot/extensions/prompt -ErrorAction SilentlyContinue
 
-git clone https://github.com/<owner>/<this-repo>
 New-Item -ItemType Directory -Force ~/.copilot/extensions | Out-Null
-Copy-Item -Recurse <this-repo>/extensions/prompt ~/.copilot/extensions/prompt
+git clone https://github.com/KalebCole/copilot-prompt ~/.copilot/extensions/prompt
 ```
 
-Or, if you already have the repo cloned somewhere:
-```pwsh
-Remove-Item -Recurse -Force ~/.copilot/extensions/prompt -ErrorAction SilentlyContinue
-Copy-Item -Recurse <local-clone>/extensions/prompt ~/.copilot/extensions/prompt
+macOS / Linux:
+```sh
+rm -rf ~/.copilot/extensions/prompt
+mkdir -p ~/.copilot/extensions
+git clone https://github.com/KalebCole/copilot-prompt ~/.copilot/extensions/prompt
 ```
+
+The repo clones directly into the extensions slot — no copy step needed.
 
 Restart Copilot CLI, or run `/clear` in an existing session, to pick up
 the extension. Verify:
@@ -120,5 +122,4 @@ Remove-Item -Recurse ~/.copilot/extensions/prompt
 
 ## License
 
-MIT (see `LICENSE` if present; otherwise this folder inherits the parent
-repo's license).
+MIT — see `LICENSE`.
